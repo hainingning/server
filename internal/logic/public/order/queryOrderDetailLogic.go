@@ -2,6 +2,7 @@ package order
 
 import (
 	"context"
+	"strings"
 
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/internal/types"
@@ -27,7 +28,12 @@ func NewQueryOrderDetailLogic(ctx context.Context, svcCtx *svc.ServiceContext) *
 }
 
 func (l *QueryOrderDetailLogic) QueryOrderDetail(req *types.QueryOrderDetailRequest) (resp *types.OrderDetail, err error) {
-	orderInfo, err := l.svcCtx.OrderModel.FindOneDetailsByOrderNo(l.ctx, req.OrderNo)
+	// Sanitize order number: strip quotes and truncate at '?' to remove URL artifacts
+	orderNo := strings.ReplaceAll(req.OrderNo, "\"", "")
+	if idx := strings.Index(orderNo, "?"); idx != -1 {
+		orderNo = orderNo[:idx]
+	}
+	orderInfo, err := l.svcCtx.OrderModel.FindOneDetailsByOrderNo(l.ctx, orderNo)
 	if err != nil {
 		l.Errorw("[QueryOrderDetail] Database query error", logger.Field("error", err.Error()), logger.Field("order_no", req.OrderNo))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find order error: %v", err.Error())

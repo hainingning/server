@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/perfect-panel/server/internal/model/log"
@@ -60,9 +61,12 @@ func (l *PurchaseCheckoutLogic) PurchaseCheckout(req *types.CheckoutOrderRequest
 	}
 
 	// Verify order is in pending payment status (status = 1)
+	// If the order is not pending, return a "completed" response instead of an error
 	if orderInfo.Status != 1 {
-		l.Logger.Error("[PurchaseCheckout] Order status error", logger.Field("status", orderInfo.Status))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.OrderStatusError), "order status error: %v", orderInfo.Status)
+		l.Logger.Info("[PurchaseCheckout] Order is not pending", logger.Field("orderNo", req.OrderNo), logger.Field("status", orderInfo.Status))
+		return &types.CheckoutOrderResponse{
+			Type: "completed",
+		}, nil
 	}
 
 	// Retrieve payment method configuration
@@ -162,7 +166,7 @@ func (l *PurchaseCheckoutLogic) alipayF2fPayment(pay *payment.Payment, info *ord
 	// Build notification URL for payment status callbacks
 	notifyUrl := ""
 	if pay.Domain != "" {
-		notifyUrl = pay.Domain + "/v1/notify/" + pay.Platform + "/" + pay.Token
+		notifyUrl = strings.TrimSuffix(pay.Domain, "/") + "/v1/notify/" + pay.Platform + "/" + pay.Token
 	} else {
 		host, ok := l.ctx.Value(constant.CtxKeyRequestHost).(string)
 		if !ok {
@@ -288,18 +292,19 @@ func (l *PurchaseCheckoutLogic) epayPayment(config *payment.Payment, info *order
 
 	// Build notification URL for payment status callbacks
 	notifyUrl := ""
-	if config.Domain != "" {
-		notifyUrl = config.Domain
+	domain := strings.TrimSuffix(config.Domain, "/")
+	if domain != "" {
+		notifyUrl = domain
 		if isGatewayMod {
 			notifyUrl += "/api/"
 		}
-		notifyUrl = notifyUrl + "/v1/notify/" + config.Platform + "/" + config.Token
+		notifyUrl = notifyUrl + "v1/notify/" + config.Platform + "/" + config.Token
 	} else {
 		host, ok := l.ctx.Value(constant.CtxKeyRequestHost).(string)
 		if !ok {
 			host = l.svcCtx.Config.Host
 		}
-		notifyUrl = "https://" + host
+		notifyUrl = "https://" + strings.TrimSuffix(host, "/")
 		if isGatewayMod {
 			notifyUrl += "/api"
 		}
@@ -348,19 +353,20 @@ func (l *PurchaseCheckoutLogic) CryptoSaaSPayment(config *payment.Payment, info 
 
 	// Build notification URL for payment status callbacks
 	notifyUrl := ""
-	if config.Domain != "" {
-		notifyUrl = config.Domain
+	domain := strings.TrimSuffix(config.Domain, "/")
+	if domain != "" {
+		notifyUrl = domain
 		if isGatewayMod {
 			notifyUrl += "/api/"
 		}
-		notifyUrl = notifyUrl + "/v1/notify/" + config.Platform + "/" + config.Token
+		notifyUrl = notifyUrl + "v1/notify/" + config.Platform + "/" + config.Token
 	} else {
 		host, ok := l.ctx.Value(constant.CtxKeyRequestHost).(string)
 		if !ok {
 			host = l.svcCtx.Config.Host
 		}
 
-		notifyUrl = "https://" + host
+		notifyUrl = "https://" + strings.TrimSuffix(host, "/")
 		if isGatewayMod {
 			notifyUrl += "/api"
 		}
