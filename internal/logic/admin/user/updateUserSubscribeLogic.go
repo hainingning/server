@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/perfect-panel/server/internal/model/dto"
-	"github.com/perfect-panel/server/internal/model/entity/user"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/xerr"
@@ -34,26 +33,22 @@ func (l *UpdateUserSubscribeLogic) UpdateUserSubscribe(req *dto.UpdateUserSubscr
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "FindOneUserSubscribe failed: %v", err.Error())
 	}
 	expiredAt := time.UnixMilli(req.ExpiredAt)
+	now := time.Now()
 	if time.Since(expiredAt).Minutes() > 0 {
 		userSub.Status = 3
+		userSub.FinishedAt = &now
 	} else {
 		userSub.Status = 1
+		userSub.FinishedAt = nil
 	}
 
-	err = l.svcCtx.Store.User().UpdateSubscribe(l.ctx, &user.Subscribe{
-		Id:          userSub.Id,
-		UserId:      userSub.UserId,
-		OrderId:     userSub.OrderId,
-		SubscribeId: req.SubscribeId,
-		StartTime:   userSub.StartTime,
-		ExpireTime:  time.UnixMilli(req.ExpiredAt),
-		Traffic:     req.Traffic,
-		Download:    req.Download,
-		Upload:      req.Upload,
-		Token:       userSub.Token,
-		UUID:        userSub.UUID,
-		Status:      userSub.Status,
-	})
+	userSub.SubscribeId = req.SubscribeId
+	userSub.ExpireTime = expiredAt
+	userSub.Traffic = req.Traffic
+	userSub.Download = req.Download
+	userSub.Upload = req.Upload
+
+	err = l.svcCtx.Store.User().UpdateSubscribe(l.ctx, userSub)
 
 	if err != nil {
 		l.Errorw("UpdateSubscribe failed:", logger.Field("error", err.Error()))
