@@ -936,7 +936,7 @@ func (m *userRepo) CountUserSubscribesByUserAndSubscribe(ctx context.Context, us
 	var total int64
 	err := m.QueryNoCacheCtx(ctx, &total, func(conn *gorm.DB, v interface{}) error {
 		return conn.Model(&user.Subscribe{}).
-			Where("user_id = ? AND subscribe_id = ?", userId, subscribeId).
+			Where("user_id = ? AND subscribe_id = ? AND status != 4", userId, subscribeId).
 			Count(&total).Error
 	})
 	return total, err

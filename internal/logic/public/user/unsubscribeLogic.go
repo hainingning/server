@@ -68,6 +68,8 @@ func (l *UnsubscribeLogic) Unsubscribe(req *dto.UnsubscribeRequest) error {
 	err = l.svcCtx.Store.InTx(l.ctx, func(store repository.Store) error {
 		// Find and update subscription status to cancelled (status = 4)
 		userSub.Status = 4 // Set status to cancelled
+		now := time.Now()
+		userSub.FinishedAt = &now
 		if err = store.User().UpdateSubscribe(l.ctx, userSub); err != nil {
 			return err
 		}
