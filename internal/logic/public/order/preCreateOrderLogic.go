@@ -81,16 +81,11 @@ func (l *PreCreateOrderLogic) PreCreateOrder(req *dto.PurchaseOrderRequest) (res
 		}
 	}
 
-	if sub.Quota > 0 {
+	if sub.Quota > 0 && req.UserSubscribeId == 0 {
 		count, err := store.User().CountUserSubscribesByUserAndSubscribe(l.ctx, u.Id, req.SubscribeId)
 		if err != nil {
 			l.Errorw("[PreCreateOrder] Database query error", logger.Field("error", err.Error()), logger.Field("user_id", u.Id), logger.Field("subscribe_id", req.SubscribeId))
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "count user subscribe error: %v", err.Error())
-		}
-		// If this is a renewal preview, the subscription being renewed is already
-		// included in the count, so subtract 1 to avoid a false quota error.
-		if req.UserSubscribeId > 0 && count > 0 {
-			count--
 		}
 		if count >= sub.Quota {
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.SubscribeQuotaLimit), "quota limit")

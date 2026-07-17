@@ -951,17 +951,38 @@ func (m *userRepo) QueryUserSubscribe(ctx context.Context, userId int64, status 
 		now := timeutil.Now()
 		// 获取当前时间向前推 7 天
 		sevenDaysAgo := timeutil.Now().Add(-7 * 24 * time.Hour)
-		// 基础条件查询
+		// 基础条件查询，不再在此处加 status 过滤，防止缓存污染
 		conn = conn.Model(&user.Subscribe{}).Where("user_id = ?", userId)
-		if len(status) > 0 {
-			conn = conn.Where("status IN ?", status)
-		}
+		
 		// 订阅过期时间大于当前时间或者订阅结束时间大于当前时间
 		return conn.Where("expire_time > ? OR finished_at >= ? OR expire_time = ?", now, sevenDaysAgo, time.UnixMilli(0)).
 			Preload("Subscribe").
 			Find(&list).Error
 	})
-	return list, err
+	
+	if err != nil {
+		return nil, err
+	}
+
+	// 内存过滤：按需返回指定的 status，解决 User 和 Admin 接口共用同一个 Cache Key 导致的越权/漏数据 Bug
+	if len(status) > 0 {
+		var filteredList []*user.SubscribeDetails
+		for _, item := range list {
+			match := false
+			for _, s := range status {
+				if int64(item.Status) == s {
+					match = true
+					break
+				}
+			}
+			if match {
+				filteredList = append(filteredList, item)
+			}
+		}
+		return filteredList, nil
+	}
+
+	return list, nil
 }
 
 // FindOneUserSubscribe  finds a subscribeDetails by id.
