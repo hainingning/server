@@ -56,11 +56,41 @@ func (l *PreCreateOrderLogic) PreCreateOrder(req *dto.PurchaseOrderRequest) (res
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find subscribe error: %v", err.Error())
 	}
 
+	if req.UserSubscribeId < 0 {
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "invalid user subscribe id")
+	}
+	if req.UserSubscribeId > 0 {
+		userSubscribe, err := store.User().FindOneSubscribe(l.ctx, req.UserSubscribeId)
+		if err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "user subscribe not found")
+			}
+			l.Errorw("[PreCreateOrder] Database query error",
+				logger.Field("error", err.Error()),
+				logger.Field("user_subscribe_id", req.UserSubscribeId))
+			return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find user subscribe error: %v", err.Error())
+		}
+		if userSubscribe.UserId != u.Id {
+			return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "user subscribe does not belong to current user")
+		}
+		if userSubscribe.SubscribeId != req.SubscribeId {
+			return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "user subscribe does not match subscribe plan")
+		}
+		if userSubscribe.Status > 3 {
+			return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "user subscribe status does not allow renewal")
+		}
+	}
+
 	if sub.Quota > 0 {
 		count, err := store.User().CountUserSubscribesByUserAndSubscribe(l.ctx, u.Id, req.SubscribeId)
 		if err != nil {
 			l.Errorw("[PreCreateOrder] Database query error", logger.Field("error", err.Error()), logger.Field("user_id", u.Id), logger.Field("subscribe_id", req.SubscribeId))
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "count user subscribe error: %v", err.Error())
+		}
+		// If this is a renewal preview, the subscription being renewed is already
+		// included in the count, so subtract 1 to avoid a false quota error.
+		if req.UserSubscribeId > 0 && count > 0 {
+			count--
 		}
 		if count >= sub.Quota {
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.SubscribeQuotaLimit), "quota limit")
