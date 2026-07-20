@@ -54,6 +54,18 @@ func (l *ResetTrafficLogic) ResetTraffic(req *dto.ResetTrafficOrderRequest) (res
 		l.Errorw("[ResetTraffic] subscribe not found", logger.Field("UserSubscribeID", req.UserSubscribeID))
 		return nil, errors.New("subscribe not found")
 	}
+
+	// Check both the persisted status and the actual expiration time. The
+	// scheduled status update runs periodically, so Status may still be active
+	// for a short time after ExpireTime has passed.
+	if isSubscriptionExpiredForReset(userSubscribe.Status, userSubscribe.ExpireTime, timeutil.Now()) {
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.SubscribeExpired), "subscribe is expired")
+	}
+	// 只允许活跃(1)或因流量用尽而完成(2)的订阅重置流量
+	if userSubscribe.Status != 1 && userSubscribe.Status != 2 {
+		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "invalid subscribe status")
+	}
+
 	amount := userSubscribe.Subscribe.Replacement
 	var deductionAmount int64
 	// Check user deduction amount
@@ -152,4 +164,14 @@ func (l *ResetTrafficLogic) ResetTraffic(req *dto.ResetTrafficOrderRequest) (res
 	return &dto.ResetTrafficOrderResponse{
 		OrderNo: orderInfo.OrderNo,
 	}, nil
+}
+
+func isSubscriptionExpiredForReset(status uint8, expireTime, now time.Time) bool {
+	if status == 3 {
+		return true
+	}
+	if expireTime.IsZero() || expireTime.Equal(time.UnixMilli(0)) {
+		return false
+	}
+	return !expireTime.After(now)
 }

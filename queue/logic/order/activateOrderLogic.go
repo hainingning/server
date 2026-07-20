@@ -610,6 +610,7 @@ func (l *ActivateOrderLogic) ResetTraffic(ctx context.Context, orderInfo *order.
 	userSub.Download = 0
 	userSub.Upload = 0
 	userSub.Status = 1
+	userSub.FinishedAt = nil
 
 	if err := l.svc.Store.User().UpdateSubscribe(ctx, userSub); err != nil {
 		logger.WithContext(ctx).Error("Update user subscribe failed", logger.Field("error", err.Error()))
