@@ -15,7 +15,7 @@ import (
 	"github.com/perfect-panel/server/pkg/cache"
 	"github.com/perfect-panel/server/pkg/logger"
 	"github.com/perfect-panel/server/pkg/orm"
-	"github.com/perfect-panel/server/pkg/timeutil"
+
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -947,15 +947,8 @@ func (m *userRepo) QueryUserSubscribe(ctx context.Context, userId int64, status 
 	var list []*user.SubscribeDetails
 	key := fmt.Sprintf("%s%d", cacheUserSubscribeUserPrefix, userId)
 	err := m.QueryCtx(ctx, &list, key, func(conn *gorm.DB, v interface{}) error {
-		// 获取当前时间
-		now := timeutil.Now()
-		// 获取当前时间向前推 7 天
-		sevenDaysAgo := timeutil.Now().Add(-7 * 24 * time.Hour)
-		// 基础条件查询，不再在此处加 status 过滤，防止缓存污染
-		conn = conn.Model(&user.Subscribe{}).Where("user_id = ?", userId)
-		
-		// 订阅过期时间大于当前时间或者订阅结束时间大于当前时间
-		return conn.Where("expire_time > ? OR finished_at >= ? OR expire_time = ?", now, sevenDaysAgo, time.UnixMilli(0)).
+		// 基础条件查询，不再在此处加 status 过滤，防止缓存污染，同时为了配合 SingleModel 的续费逻辑，返回所有历史订阅
+		return conn.Model(&user.Subscribe{}).Where("user_id = ?", userId).
 			Preload("Subscribe").
 			Find(&list).Error
 	})

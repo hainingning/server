@@ -68,7 +68,7 @@ func (l *PurchaseLogic) Purchase(req *dto.PurchaseOrderRequest) (resp *dto.Purch
 	}
 
 	// find user subscription
-	userSub, err := store.User().QueryUserSubscribe(l.ctx, u.Id)
+	userSub, err := store.User().QueryUserSubscribe(l.ctx, u.Id, 0, 1, 2, 3)
 	if err != nil {
 		l.Errorw("[Purchase] Database query error", logger.Field("error", err.Error()), logger.Field("user_id", u.Id))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find user subscription error: %v", err.Error())

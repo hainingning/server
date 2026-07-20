@@ -38,7 +38,7 @@ func (l *CreateUserSubscribeLogic) CreateUserSubscribe(req *dto.CreateUserSubscr
 		l.Errorw("FindOne error", logger.Field("error", err.Error()), logger.Field("userId", req.UserId))
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "FindOne error: %v", err.Error())
 	}
-	subs, err := l.svcCtx.Store.User().QueryUserSubscribe(l.ctx, req.UserId)
+	subs, err := l.svcCtx.Store.User().QueryUserSubscribe(l.ctx, req.UserId, 0, 1, 2, 3)
 	if err != nil {
 		l.Errorw("QueryUserSubscribe error", logger.Field("error", err.Error()), logger.Field("userId", req.UserId))
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "QueryUserSubscribe error: %v", err.Error())
