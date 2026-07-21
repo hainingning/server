@@ -34,7 +34,7 @@ func (l *QuerySubscribeListLogic) QuerySubscribeList(req *dto.QuerySubscribeList
 		Page:            1,
 		Size:            9999,
 		Language:        req.Language,
-		Sell:            true,
+		Show:            true,
 		DefaultLanguage: true,
 	})
 	if err != nil {
