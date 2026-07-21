@@ -1,18 +1,88 @@
 package repository
 
 import (
+	"bytes"
+	"context"
+	"log"
 	"strings"
 	"testing"
 
+	"github.com/alicebob/miniredis/v2"
 	trafficEntity "github.com/perfect-panel/server/internal/model/entity/traffic"
 	"github.com/perfect-panel/server/internal/model/entity/user"
+	"github.com/redis/go-redis/v9"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 func ptr[T any](v T) *T {
 	return &v
+}
+
+func TestUserRepoFindOneForUpdateUsesRowLockAndDefaultScope(t *testing.T) {
+	var logs bytes.Buffer
+	db, err := gorm.Open(mysql.New(mysql.Config{
+		DSN:                       "gorm:gorm@tcp(localhost:9910)/gorm?charset=utf8&parseTime=True&loc=Local",
+		SkipInitializeWithVersion: true,
+	}), &gorm.Config{
+		DryRun:                 true,
+		DisableAutomaticPing:   true,
+		SkipDefaultTransaction: true,
+		Logger:                 gormlogger.New(log.New(&logs, "", 0), gormlogger.Config{LogLevel: gormlogger.Info}),
+	})
+	if err != nil {
+		t.Fatalf("open gorm db: %v", err)
+	}
+	redisServer := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
+	t.Cleanup(func() { _ = redisClient.Close() })
+
+	if _, err := newUserRepo(db, redisClient).FindOneForUpdate(context.Background(), 42); err != nil {
+		t.Fatalf("FindOneForUpdate: %v", err)
+	}
+	sql := logs.String()
+	for _, want := range []string{"FROM `user`", "WHERE id = 42", "`user`.`deleted_at` IS NULL", "FOR UPDATE"} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("SQL missing %q:\n%s", want, sql)
+		}
+	}
+}
+
+func TestUserRepoUpdateBalanceFieldsOnlyWritesBalanceColumns(t *testing.T) {
+	var logs bytes.Buffer
+	db, err := gorm.Open(mysql.New(mysql.Config{
+		DSN:                       "gorm:gorm@tcp(localhost:9910)/gorm?charset=utf8&parseTime=True&loc=Local",
+		SkipInitializeWithVersion: true,
+	}), &gorm.Config{
+		DryRun:                 true,
+		DisableAutomaticPing:   true,
+		SkipDefaultTransaction: true,
+		Logger:                 gormlogger.New(log.New(&logs, "", 0), gormlogger.Config{LogLevel: gormlogger.Info}),
+	})
+	if err != nil {
+		t.Fatalf("open gorm db: %v", err)
+	}
+	redisServer := miniredis.RunT(t)
+	redisClient := redis.NewClient(&redis.Options{Addr: redisServer.Addr()})
+	t.Cleanup(func() { _ = redisClient.Close() })
+
+	err = newUserRepo(db, redisClient).UpdateBalanceFields(context.Background(), &user.User{Id: 42, Balance: 100, GiftAmount: 20})
+	if err != nil {
+		t.Fatalf("UpdateBalanceFields: %v", err)
+	}
+	sql := logs.String()
+	for _, want := range []string{"UPDATE `user`", "`balance`=100", "`gift_amount`=20", "WHERE id = 42"} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("SQL missing %q:\n%s", want, sql)
+		}
+	}
+	for _, unwanted := range []string{"`password`", "`commission`", "`refer_code`"} {
+		if strings.Contains(sql, unwanted) {
+			t.Fatalf("SQL should not contain %q:\n%s", unwanted, sql)
+		}
+	}
 }
 
 func TestApplyUserPageFiltersSearchSQL(t *testing.T) {
@@ -134,8 +204,8 @@ func TestUserSubscribeTrafficIncrementExprSQL(t *testing.T) {
 			}),
 			want: []string{
 				"UPDATE `user_subscribe`",
-				"`download`=`user_subscribe`.`download` + CASE `user_subscribe`.`id` WHEN ? THEN ? WHEN ? THEN ? ELSE 0 END",
-				"`upload`=`user_subscribe`.`upload` + CASE `user_subscribe`.`id` WHEN ? THEN ? WHEN ? THEN ? ELSE 0 END",
+				"`download`=`user_subscribe`.`download` + CASE `user_subscribe`.`id` WHEN ? THEN ? WHEN ? THEN ? ELSE CAST(0 AS SIGNED) END",
+				"`upload`=`user_subscribe`.`upload` + CASE `user_subscribe`.`id` WHEN ? THEN ? WHEN ? THEN ? ELSE CAST(0 AS SIGNED) END",
 				"WHERE id IN (?,?)",
 			},
 		},
@@ -147,8 +217,8 @@ func TestUserSubscribeTrafficIncrementExprSQL(t *testing.T) {
 			}),
 			want: []string{
 				`UPDATE "user_subscribe"`,
-				`"download"="user_subscribe"."download" + CASE "user_subscribe"."id" WHEN $1 THEN $2 WHEN $3 THEN $4 ELSE 0 END`,
-				`"upload"="user_subscribe"."upload" + CASE "user_subscribe"."id" WHEN $5 THEN $6 WHEN $7 THEN $8 ELSE 0 END`,
+				`"download"="user_subscribe"."download" + CASE "user_subscribe"."id" WHEN $1 THEN $2 WHEN $3 THEN $4 ELSE 0::bigint END`,
+				`"upload"="user_subscribe"."upload" + CASE "user_subscribe"."id" WHEN $5 THEN $6 WHEN $7 THEN $8 ELSE 0::bigint END`,
 				`WHERE id IN ($10,$11)`,
 			},
 		},
@@ -156,7 +226,7 @@ func TestUserSubscribeTrafficIncrementExprSQL(t *testing.T) {
 
 	deltas := mergeSubscribeTrafficDeltas([]trafficEntity.SubscribeTrafficDelta{
 		{SubscribeId: 2, Download: 20, Upload: 10},
-		{SubscribeId: 1, Download: 40, Upload: 30},
+		{SubscribeId: 1, Download: 2_508_079_104, Upload: 30},
 		{SubscribeId: 2, Download: 3, Upload: 4},
 	})
 	for _, tt := range tests {
@@ -183,8 +253,8 @@ func TestUserSubscribeTrafficIncrementExprSQL(t *testing.T) {
 					t.Fatalf("SQL missing %q:\n%s", want, sql)
 				}
 			}
-			if got := stmt.Vars[1]; got != int64(40) {
-				t.Fatalf("first download increment = %#v, want 40", got)
+			if got := stmt.Vars[1]; got != int64(2_508_079_104) {
+				t.Fatalf("first download increment = %#v, want 2508079104", got)
 			}
 			if got := stmt.Vars[3]; got != int64(23) {
 				t.Fatalf("second download increment = %#v, want 23", got)
