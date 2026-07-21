@@ -6,6 +6,7 @@ on:
       - main
     paths-ignore:
       - ".github/**"
+  workflow_dispatch:
 
 concurrency:
   group: deploy-production
@@ -97,12 +98,12 @@ jobs:
 
             healthy=0
             for _ in $(seq 1 40); do
-              status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' ppanel-service 2>/dev/null || true)"
-              if [ "${status}" = "healthy" ]; then
+              if docker exec ppanel-service wget --quiet --tries=1 --spider http://127.0.0.1:8080/v1/common/heartbeat; then
                 healthy=1
                 break
               fi
-              if [ "${status}" = "unhealthy" ]; then
+              running="$(docker inspect --format '{{.State.Running}}' ppanel-service 2>/dev/null || true)"
+              if [ "${running}" != "true" ]; then
                 break
               fi
               sleep 3
