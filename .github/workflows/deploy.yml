@@ -98,7 +98,7 @@ jobs:
 
             healthy=0
             for _ in $(seq 1 40); do
-              if docker exec ppanel-service wget --quiet --tries=1 --spider http://127.0.0.1:8080/v1/common/heartbeat; then
+              if docker exec ppanel-nginx wget --quiet --tries=1 --spider http://ppanel-service:8080/v1/common/heartbeat; then
                 healthy=1
                 break
               fi
