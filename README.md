@@ -10,7 +10,7 @@
 
 **PPanel 是一个纯净、专业、完美的开源代理面板工具，旨在成为您学习和实际使用的理想选择。**
 
-[中文](README.md) | [English](README_EN.md) | [报告问题](https://github.com/perfect-panel/server/issues/new) | [功能请求](https://github.com/perfect-panel/server/issues/new)
+[中文](README.md) | [English](doc/README_EN.md) | [报告问题](https://github.com/perfect-panel/server/issues/new) | [功能请求](https://github.com/perfect-panel/server/issues/new)
 
 </div>
 
@@ -113,9 +113,18 @@ PPanel 服务端是 PPanel 项目的后端组件，为代理服务提供强大�
 
 ## 📖 API 文档
 
-API 文档部分内容位于仓库中的 `ppanel.json` 文件（Swagger 2.0 格式），这是一个手动维护的部分遗留快照，并未完整描述当前 Hertz 路由。
+API 文档使用 Handler 上的 Swaggo 注解生成，并通过 Hertz 实际注册路由进行完整性校验。根目录的 `ppanel.json` 是完整 Swagger 2.0 文档：
 
 [ppanel.json](./ppanel.json)
+
+修改路由、请求 DTO 或响应 DTO 后，运行：
+
+```bash
+./script/generate-swagger.sh
+go test ./internal/route -run '^TestSwagger' -count=1
+```
+
+`master` 分支的 GitHub Actions 会生成 `ppanel.json` 以及 `admin.json`、`user.json`、`common.json`、`node.json` 分类文档，并同步到 `perfect-panel/ppanel-docs` 的 `public/swagger` 目录。现有 `GH_TOKEN` secret 需要对文档仓库具有 Contents 写权限。
 
 ## 🔗 相关项目
 
@@ -179,7 +188,7 @@ make linux-arm64  # 构建特定平台
 
 ## 🤝 贡献
 
-欢迎各种贡献，包括功能开发、错误修复和文档改进。请查看[贡献指南](CONTRIBUTING_ZH.md)了解详情。
+欢迎各种贡献，包括功能开发、错误修复和文档改进。请查看[贡献指南](doc/CONTRIBUTING_ZH.md)了解详情。
 
 ## ✨ 特别感谢
 

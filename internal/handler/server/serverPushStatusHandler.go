@@ -9,11 +9,23 @@ import (
 	"github.com/perfect-panel/server/internal/svc"
 )
 
-// Push server status
+// ServerPushStatusHandler documents Push server status.
+//
+// @Summary Push server status
+// @Tags node
+// @Accept json,application/protobuf
+// @Produce json,application/protobuf
+// @Security NodeSecret
+// @Param request body dto.ServerPushStatusRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean
+// @Router /v1/server/status [post]
 func ServerPushStatusHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		req := dto.ServerPushStatusRequest{}
-		_ = ctx.BindJSON(&req)
+		if err := bindServerStatusRequest(ctx, &req); err != nil {
+			writeParamError(ctx, err)
+			return
+		}
 		commonReq, err := serverCommonRequest(ctx)
 		if err != nil {
 			writeParamError(ctx, err)
@@ -26,6 +38,6 @@ func ServerPushStatusHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 		}
 
 		l := server.NewServerPushStatusLogic(c, svcCtx)
-		writeHTTPResult(ctx, nil, l.ServerPushStatus(&req))
+		writeServerReportResult(ctx, l.ServerPushStatus(&req))
 	}
 }

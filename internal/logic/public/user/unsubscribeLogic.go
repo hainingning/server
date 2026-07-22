@@ -49,6 +49,12 @@ func (l *UnsubscribeLogic) Unsubscribe(req *dto.UnsubscribeRequest) error {
 		l.Errorw("FindOneSubscribe failed", logger.Field("error", err.Error()), logger.Field("reqId", req.Id))
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "FindOneSubscribe failed: %v", err.Error())
 	}
+	if userSub.UserId != u.Id {
+		l.Errorw("User subscribe does not belong to current user",
+			logger.Field("userSubscribeId", userSub.Id),
+			logger.Field("userId", u.Id))
+		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "user subscribe does not belong to current user")
+	}
 
 	activate := []uint8{0, 1, 2}
 
@@ -72,6 +78,11 @@ func (l *UnsubscribeLogic) Unsubscribe(req *dto.UnsubscribeRequest) error {
 		userSub.FinishedAt = &now
 		if err = store.User().UpdateSubscribe(l.ctx, userSub); err != nil {
 			return err
+		}
+		// Subscriptions created by an administrator have no associated order.
+		// They can be cancelled, but there is no payment to refund.
+		if userSub.OrderId == 0 {
+			return nil
 		}
 
 		// Query the original order information to determine refund strategy

@@ -9,11 +9,23 @@ import (
 	"github.com/perfect-panel/server/internal/svc"
 )
 
-// Push online users
+// PushOnlineUsersHandler documents Push online users.
+//
+// @Summary Push online users
+// @Tags node
+// @Accept json,application/protobuf
+// @Produce json,application/protobuf
+// @Security NodeSecret
+// @Param request body dto.OnlineUsersRequest true "Request parameters"
+// @Success 200 {object} result.ResponseSuccessBean
+// @Router /v1/server/online [post]
 func PushOnlineUsersHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 	return func(c context.Context, ctx *app.RequestContext) {
 		req := dto.OnlineUsersRequest{}
-		_ = ctx.BindJSON(&req)
+		if err := bindOnlineUsersRequest(ctx, &req); err != nil {
+			writeParamError(ctx, err)
+			return
+		}
 		commonReq, err := serverCommonRequest(ctx)
 		if err != nil {
 			writeParamError(ctx, err)
@@ -26,6 +38,6 @@ func PushOnlineUsersHandler(svcCtx *svc.ServiceContext) app.HandlerFunc {
 		}
 
 		l := server.NewPushOnlineUsersLogic(c, svcCtx)
-		writeHTTPResult(ctx, nil, l.PushOnlineUsers(&req))
+		writeServerReportResult(ctx, l.PushOnlineUsers(&req))
 	}
 }
