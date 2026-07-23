@@ -81,7 +81,7 @@ func (l *EPayNotifyLogic) EPayNotify(req *dto.EPayNotifyRequest) error {
 		l.Logger.Error("[EPayNotify] Order payment binding failed", logger.Field("orderNo", req.OutTradeNo), logger.Field("error", err.Error()))
 		return err
 	}
-	if finished, err := finishedOrderDuplicate(orderInfo, req.TradeNo); err != nil {
+	if finished, err := finishedOrderDuplicate(l.ctx, orderInfo, req.TradeNo); err != nil {
 		return err
 	} else if finished {
 		return nil
@@ -96,12 +96,22 @@ func (l *EPayNotifyLogic) EPayNotify(req *dto.EPayNotifyRequest) error {
 
 	queried, err := client.QueryOrder(req.OutTradeNo)
 	if err != nil {
-		l.Logger.Error("[EPayNotify] Gateway order query failed", logger.Field("orderNo", req.OutTradeNo), logger.Field("error", err.Error()))
-		return err
-	}
-	if err := validateQueriedEPayOrder(queried, req, credentials, callbackAmount); err != nil {
-		l.Logger.Error("[EPayNotify] Gateway order validation failed", logger.Field("orderNo", req.OutTradeNo), logger.Field("error", err.Error()))
-		return err
+		if errors.Is(err, epay.ErrQueryNotSupported) {
+			// This gateway does not implement the order query API.
+			// The callback signature was already verified above, so it is safe
+			// to proceed without the active confirmation step.
+			l.Logger.Infow("[EPayNotify] Gateway does not support order query; accepting signature-verified callback",
+				logger.Field("orderNo", req.OutTradeNo),
+			)
+		} else {
+			l.Logger.Error("[EPayNotify] Gateway order query failed", logger.Field("orderNo", req.OutTradeNo), logger.Field("error", err.Error()))
+			return err
+		}
+	} else {
+		if err := validateQueriedEPayOrder(queried, req, credentials, callbackAmount); err != nil {
+			l.Logger.Error("[EPayNotify] Gateway order validation failed", logger.Field("orderNo", req.OutTradeNo), logger.Field("error", err.Error()))
+			return err
+		}
 	}
 
 	if err := markOrderPaidAndEnqueue(l.ctx, l.svcCtx, orderInfo, req.TradeNo); err != nil {
@@ -131,17 +141,6 @@ func epayCredentialsForPayment(data *payment.Payment) (epayCredentials, error) {
 			merchantID:  config.Pid,
 			endpoint:    config.Url,
 			key:         config.Key,
-			paymentType: config.Type,
-		}
-	case paymentPlatform.CryptoSaaS:
-		var config payment.CryptoSaaSConfig
-		if err := json.Unmarshal([]byte(data.Config), &config); err != nil {
-			return result, err
-		}
-		result = epayCredentials{
-			merchantID:  config.AccountID,
-			endpoint:    config.Endpoint,
-			key:         config.SecretKey,
 			paymentType: config.Type,
 		}
 	default:

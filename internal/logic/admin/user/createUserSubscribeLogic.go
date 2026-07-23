@@ -38,13 +38,15 @@ func (l *CreateUserSubscribeLogic) CreateUserSubscribe(req *dto.CreateUserSubscr
 		l.Errorw("FindOne error", logger.Field("error", err.Error()), logger.Field("userId", req.UserId))
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "FindOne error: %v", err.Error())
 	}
-	subs, err := l.svcCtx.Store.User().QueryUserSubscribe(l.ctx, req.UserId, 0, 1, 2, 3)
-	if err != nil {
-		l.Errorw("QueryUserSubscribe error", logger.Field("error", err.Error()), logger.Field("userId", req.UserId))
-		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "QueryUserSubscribe error: %v", err.Error())
-	}
-	if len(subs) >= 1 && l.svcCtx.Config.Subscribe.SingleModel {
-		return errors.Wrapf(xerr.NewErrCode(xerr.SingleSubscribeModeExceedsLimit), "Single subscribe mode exceeds limit")
+	if l.svcCtx.Config.Subscribe.SingleModel {
+		hasBlockingSubscription, err := l.svcCtx.Store.UserSubscription().HasBlockingSubscription(l.ctx, req.UserId)
+		if err != nil {
+			l.Errorw("HasBlockingSubscription error", logger.Field("error", err.Error()), logger.Field("userId", req.UserId))
+			return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "check user subscription error: %v", err.Error())
+		}
+		if hasBlockingSubscription {
+			return errors.Wrapf(xerr.NewErrCode(xerr.SingleSubscribeModeExceedsLimit), "Single subscribe mode exceeds limit")
+		}
 	}
 	sub, err := l.svcCtx.Store.Subscribe().FindOne(l.ctx, req.SubscribeId)
 	if err != nil {
@@ -65,14 +67,14 @@ func (l *CreateUserSubscribeLogic) CreateUserSubscribe(req *dto.CreateUserSubscr
 		Upload:      0,
 		Token:       uuidx.SubscribeToken(fmt.Sprintf("adminCreate:%d", timeutil.Now().UnixMilli())),
 		UUID:        uuid.New().String(),
-		Status:      1,
+		Status:      user.SubscribeStatusActive,
 	}
-	if err = l.svcCtx.Store.User().InsertSubscribe(l.ctx, &userSub); err != nil {
+	if err = l.svcCtx.Store.UserSubscription().InsertSubscribe(l.ctx, &userSub); err != nil {
 		l.Errorw("InsertSubscribe error", logger.Field("error", err.Error()))
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseInsertError), "InsertSubscribe error: %v", err.Error())
 	}
 
-	err = l.svcCtx.Store.User().UpdateUserCache(l.ctx, userInfo)
+	err = l.svcCtx.Store.UserCache().UpdateUserCache(l.ctx, userInfo)
 	if err != nil {
 		l.Errorw("UpdateUserCache error", logger.Field("error", err.Error()))
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseInsertError), "UpdateUserCache error: %v", err.Error())

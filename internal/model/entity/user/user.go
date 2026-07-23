@@ -9,7 +9,7 @@ import (
 
 type User struct {
 	Id                    int64          `gorm:"primaryKey"`
-	Password              string         `gorm:"type:varchar(100);not null;comment:User Password"`
+	Password              string         `gorm:"type:varchar(255);not null;comment:User Password"`
 	Algo                  string         `gorm:"type:varchar(20);default:'default';comment:Encryption Algorithm"`
 	Salt                  string         `gorm:"type:varchar(20);default:null;comment:Password Salt"`
 	Avatar                string         `gorm:"type:MEDIUMTEXT;comment:User Avatar"`
@@ -57,6 +57,15 @@ type Subscribe struct {
 	CreatedAt   time.Time  `gorm:"<-:create;comment:Creation Time"`
 	UpdatedAt   time.Time  `gorm:"comment:Update Time"`
 }
+
+const (
+	SubscribeStatusPending uint8 = iota
+	SubscribeStatusActive
+	SubscribeStatusFinished
+	SubscribeStatusExpired
+	SubscribeStatusDeducted
+	SubscribeStatusStopped
+)
 
 func (*Subscribe) TableName() string {
 	return "user_subscribe"

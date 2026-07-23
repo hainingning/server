@@ -44,7 +44,7 @@ func (l *UnsubscribeLogic) Unsubscribe(req *dto.UnsubscribeRequest) error {
 	}
 
 	// find user subscription by ID
-	userSub, err := l.svcCtx.Store.User().FindOneSubscribe(l.ctx, req.Id)
+	userSub, err := l.svcCtx.Store.UserSubscription().FindOneSubscribe(l.ctx, req.Id)
 	if err != nil {
 		l.Errorw("FindOneSubscribe failed", logger.Field("error", err.Error()), logger.Field("reqId", req.Id))
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "FindOneSubscribe failed: %v", err.Error())
@@ -56,10 +56,9 @@ func (l *UnsubscribeLogic) Unsubscribe(req *dto.UnsubscribeRequest) error {
 		return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "user subscribe does not belong to current user")
 	}
 
-	activate := []uint8{0, 1, 2}
+	cancelable := []uint8{user.SubscribeStatusPending, user.SubscribeStatusActive, user.SubscribeStatusFinished}
 
-	if !tool.Contains(activate, userSub.Status) {
-		// Only active (2) or paused (5) subscriptions can be cancelled
+	if !tool.Contains(cancelable, userSub.Status) {
 		l.Errorw("Subscription status invalid for cancellation", logger.Field("userSubscribeId", userSub.Id), logger.Field("status", userSub.Status))
 		return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "Subscription status invalid for cancellation")
 	}
@@ -72,21 +71,36 @@ func (l *UnsubscribeLogic) Unsubscribe(req *dto.UnsubscribeRequest) error {
 
 	// Process unsubscription in a database transaction to ensure data consistency
 	err = l.svcCtx.Store.InTx(l.ctx, func(store repository.Store) error {
-		// Find and update subscription status to cancelled (status = 4)
-		userSub.Status = 4 // Set status to cancelled
-		now := time.Now()
-		userSub.FinishedAt = &now
-		if err = store.User().UpdateSubscribe(l.ctx, userSub); err != nil {
+		// Re-read both mutable balances and the subscription under row locks.
+		// The context user is only an authorization principal and can be stale.
+		lockedSub, err := store.UserSubscription().FindOneSubscribeForUpdate(l.ctx, req.Id)
+		if err != nil {
+			return err
+		}
+		if lockedSub.UserId != u.Id {
+			return errors.Wrapf(xerr.NewErrCode(xerr.InvalidAccess), "user subscribe does not belong to current user")
+		}
+		if !tool.Contains(cancelable, lockedSub.Status) {
+			return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "Subscription status invalid for cancellation")
+		}
+		lockedSub.Status = user.SubscribeStatusDeducted
+		now := timeutil.Now()
+		lockedSub.FinishedAt = &now
+		if err = store.UserSubscription().UpdateSubscribe(l.ctx, lockedSub); err != nil {
 			return err
 		}
 		// Subscriptions created by an administrator have no associated order.
 		// They can be cancelled, but there is no payment to refund.
-		if userSub.OrderId == 0 {
+		if lockedSub.OrderId == 0 {
 			return nil
+		}
+		lockedUser, err := store.User().FindOneForUpdate(l.ctx, u.Id)
+		if err != nil {
+			return err
 		}
 
 		// Query the original order information to determine refund strategy
-		orderInfo, err := store.Order().FindOne(l.ctx, userSub.OrderId)
+		orderInfo, err := store.Order().FindOne(l.ctx, lockedSub.OrderId)
 		if err != nil {
 			return err
 		}
@@ -97,20 +111,20 @@ func (l *UnsubscribeLogic) Unsubscribe(req *dto.UnsubscribeRequest) error {
 			if orderInfo.GiftAmount >= remainingAmount {
 				// Gift amount covers the entire refund - refund all to gift balance
 				gift = remainingAmount
-				balance = u.Balance // Regular balance remains unchanged
+				balance = lockedUser.Balance // Regular balance remains unchanged
 			} else {
 				// Gift amount insufficient - refund to gift first, remainder to regular balance
 				gift = orderInfo.GiftAmount
-				balance = u.Balance + (remainingAmount - orderInfo.GiftAmount)
+				balance = lockedUser.Balance + (remainingAmount - orderInfo.GiftAmount)
 			}
 		} else {
 			// For non-balance payment orders, refund entirely to regular balance
-			balance = remainingAmount + u.Balance
+			balance = remainingAmount + lockedUser.Balance
 			gift = 0
 		}
 
 		// Create balance log entry only if there's an actual regular balance refund
-		balanceRefundAmount := balance - u.Balance
+		balanceRefundAmount := balance - lockedUser.Balance
 		if balanceRefundAmount > 0 {
 			balanceLog := log.Balance{
 				OrderNo:   orderInfo.OrderNo,
@@ -124,7 +138,7 @@ func (l *UnsubscribeLogic) Unsubscribe(req *dto.UnsubscribeRequest) error {
 			if err := store.Log().Insert(l.ctx, &log.SystemLog{
 				Type:     log.TypeBalance.Uint8(),
 				Date:     timeutil.Now().Format(time.DateOnly),
-				ObjectID: u.Id,
+				ObjectID: lockedUser.Id,
 				Content:  string(content),
 			}); err != nil {
 				return err
@@ -135,11 +149,11 @@ func (l *UnsubscribeLogic) Unsubscribe(req *dto.UnsubscribeRequest) error {
 		if gift > 0 {
 
 			giftLog := log.Gift{
-				SubscribeId: userSub.Id,
+				SubscribeId: lockedSub.Id,
 				OrderNo:     orderInfo.OrderNo,
 				Type:        log.GiftTypeIncrease, // Type 1 represents gift amount increase
 				Amount:      gift,
-				Balance:     u.GiftAmount + gift,
+				Balance:     lockedUser.GiftAmount + gift,
 				Remark:      "Unsubscribe refund",
 			}
 			content, _ := giftLog.Marshal()
@@ -147,18 +161,19 @@ func (l *UnsubscribeLogic) Unsubscribe(req *dto.UnsubscribeRequest) error {
 			if err := store.Log().Insert(l.ctx, &log.SystemLog{
 				Type:     log.TypeGift.Uint8(),
 				Date:     timeutil.Now().Format(time.DateOnly),
-				ObjectID: u.Id,
+				ObjectID: lockedUser.Id,
 				Content:  string(content),
 			}); err != nil {
 				return err
 			}
 			// Update user's gift amount
-			u.GiftAmount += gift
+			lockedUser.GiftAmount += gift
 		}
 
-		// Update user's regular balance and save changes to database
-		u.Balance = balance
-		return store.User().Update(l.ctx, u)
+		// Update only financial fields so this refund cannot overwrite a
+		// concurrent profile/auth update.
+		lockedUser.Balance = balance
+		return store.User().UpdateBalanceFields(l.ctx, lockedUser)
 	})
 
 	if err != nil {
@@ -167,7 +182,7 @@ func (l *UnsubscribeLogic) Unsubscribe(req *dto.UnsubscribeRequest) error {
 	}
 
 	//clear user subscription cache
-	if err = l.svcCtx.Store.User().ClearSubscribeCache(l.ctx, userSub); err != nil {
+	if err = l.svcCtx.Store.UserCache().ClearSubscribeCache(l.ctx, userSub); err != nil {
 		l.Errorw("ClearSubscribeCache failed", logger.Field("error", err.Error()), logger.Field("userSubscribeId", userSub.Id))
 		return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "ClearSubscribeCache failed: %v", err.Error())
 	}

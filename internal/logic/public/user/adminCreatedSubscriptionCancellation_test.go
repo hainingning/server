@@ -15,6 +15,8 @@ import (
 
 type adminCreatedSubscriptionUserRepo struct {
 	repository.UserRepo
+	repository.UserSubscriptionRepo
+	repository.UserCacheRepo
 
 	subscribe                 *usermodel.Subscribe
 	findOneSubscribeCalls     int
@@ -25,6 +27,10 @@ type adminCreatedSubscriptionUserRepo struct {
 
 func (r *adminCreatedSubscriptionUserRepo) FindOneSubscribe(_ context.Context, _ int64) (*usermodel.Subscribe, error) {
 	r.findOneSubscribeCalls++
+	return r.subscribe, nil
+}
+
+func (r *adminCreatedSubscriptionUserRepo) FindOneSubscribeForUpdate(_ context.Context, _ int64) (*usermodel.Subscribe, error) {
 	return r.subscribe, nil
 }
 
@@ -57,13 +63,21 @@ func (r *adminCreatedSubscriptionSubscribeRepo) ClearCache(_ context.Context, _ 
 type adminCreatedSubscriptionStore struct {
 	repository.Store
 
-	userRepo      repository.UserRepo
+	userRepo      *adminCreatedSubscriptionUserRepo
 	subscribeRepo repository.SubscribeRepo
 	inTxCalls     int
 	orderCalls    int
 }
 
 func (s *adminCreatedSubscriptionStore) User() repository.UserRepo {
+	return s.userRepo
+}
+
+func (s *adminCreatedSubscriptionStore) UserSubscription() repository.UserSubscriptionRepo {
+	return s.userRepo
+}
+
+func (s *adminCreatedSubscriptionStore) UserCache() repository.UserCacheRepo {
 	return s.userRepo
 }
 

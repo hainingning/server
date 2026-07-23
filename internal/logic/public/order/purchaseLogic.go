@@ -67,14 +67,13 @@ func (l *PurchaseLogic) Purchase(req *dto.PurchaseOrderRequest) (resp *dto.Purch
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "quantity exceeds maximum limit of %d", MaxQuantity)
 	}
 
-	// find user subscription
-	userSub, err := store.User().QueryUserSubscribe(l.ctx, u.Id, 0, 1, 2, 3)
-	if err != nil {
-		l.Errorw("[Purchase] Database query error", logger.Field("error", err.Error()), logger.Field("user_id", u.Id))
-		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find user subscription error: %v", err.Error())
-	}
 	if l.svcCtx.Config.Subscribe.SingleModel {
-		if len(userSub) > 0 {
+		hasBlockingSubscription, err := store.UserSubscription().HasBlockingSubscription(l.ctx, u.Id)
+		if err != nil {
+			l.Errorw("[Purchase] Database query error", logger.Field("error", err.Error()), logger.Field("user_id", u.Id))
+			return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "check user subscription error: %v", err.Error())
+		}
+		if hasBlockingSubscription {
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.UserSubscribeExist), "user has subscription")
 		}
 	}
@@ -98,11 +97,10 @@ func (l *PurchaseLogic) Purchase(req *dto.PurchaseOrderRequest) (resp *dto.Purch
 
 	// check subscribe plan limit
 	if sub.Quota > 0 {
-		var count int64
-		for _, v := range userSub {
-			if v.SubscribeId == req.SubscribeId {
-				count += 1
-			}
+		count, err := store.UserSubscription().CountQuotaConsumingSubscriptions(l.ctx, u.Id, req.SubscribeId)
+		if err != nil {
+			l.Errorw("[Purchase] Database query error", logger.Field("error", err.Error()), logger.Field("user_id", u.Id), logger.Field("subscribe_id", req.SubscribeId))
+			return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "count user subscriptions error: %v", err.Error())
 		}
 		if count >= sub.Quota {
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.SubscribeQuotaLimit), "quota limit")
@@ -168,6 +166,9 @@ func (l *PurchaseLogic) Purchase(req *dto.PurchaseOrderRequest) (resp *dto.Purch
 		l.Errorw("[Purchase] Database query error", logger.Field("error", err.Error()), logger.Field("payment", req.Payment))
 		return nil, errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "find payment method error: %v", err.Error())
 	}
+	if err := ensurePaymentAvailable(payment); err != nil {
+		return nil, err
+	}
 	var feeAmount int64
 	// Calculate the handling fee
 	if amount > 0 {
@@ -181,18 +182,6 @@ func (l *PurchaseLogic) Purchase(req *dto.PurchaseOrderRequest) (resp *dto.Purch
 				logger.Field("max", MaxOrderAmount),
 				logger.Field("user_id", u.Id))
 			return nil, errors.Wrapf(xerr.NewErrCode(xerr.InvalidParams), "order amount exceeds maximum limit")
-		}
-	}
-
-	var deductionAmount int64
-	// Gift amount is deducted after payment fee, because the fee is based on the payable cash amount.
-	if u.GiftAmount > 0 && amount > 0 {
-		if u.GiftAmount >= amount {
-			deductionAmount = amount
-			amount = 0
-		} else {
-			deductionAmount = u.GiftAmount
-			amount -= u.GiftAmount
 		}
 	}
 
@@ -211,7 +200,7 @@ func (l *PurchaseLogic) Purchase(req *dto.PurchaseOrderRequest) (resp *dto.Purch
 		Price:          price,
 		Amount:         amount,
 		Discount:       discountAmount,
-		GiftAmount:     deductionAmount,
+		GiftAmount:     0,
 		Coupon:         req.Coupon,
 		CouponDiscount: coupon,
 		PaymentId:      payment.Id,
@@ -223,8 +212,16 @@ func (l *PurchaseLogic) Purchase(req *dto.PurchaseOrderRequest) (resp *dto.Purch
 	}
 	// Database transaction
 	err = store.InTx(l.ctx, func(txStore repository.Store) error {
+		// The request-context user is only an authentication snapshot. Lock and
+		// re-read the account before reserving gift credit so two concurrent
+		// orders cannot spend the same balance.
+		lockedUser, e := txStore.User().FindOneForUpdate(l.ctx, u.Id)
+		if e != nil {
+			return e
+		}
+
 		if sub.Quota > 0 {
-			count, e := txStore.User().CountUserSubscribesByUserAndSubscribe(l.ctx, u.Id, req.SubscribeId)
+			count, e := txStore.UserSubscription().CountQuotaConsumingSubscriptions(l.ctx, u.Id, req.SubscribeId)
 			if e != nil {
 				l.Errorw("[Purchase] Database query error", logger.Field("error", e.Error()), logger.Field("user_id", u.Id), logger.Field("subscribe_id", req.SubscribeId))
 				return e
@@ -233,13 +230,27 @@ func (l *PurchaseLogic) Purchase(req *dto.PurchaseOrderRequest) (resp *dto.Purch
 				return errors.Wrapf(xerr.NewErrCode(xerr.SubscribeQuotaLimit), "quota limit")
 			}
 		}
+		if orderInfo.Coupon != "" {
+			reserved, e := txStore.Coupon().ReserveUsage(l.ctx, orderInfo.Coupon, timeutil.Now().Unix())
+			if e != nil {
+				return e
+			}
+			if !reserved {
+				return errors.Wrapf(xerr.NewErrCode(xerr.CouponInsufficientUsage), "coupon used or expired")
+			}
+			orderInfo.CouponReserved = true
+		}
 
-		// update user deduction && Pre deduction ,Return after canceling the order
+		// Gift credit is reserved only after the row lock.  The fee has already
+		// been calculated on the full external payable amount by design.
+		if lockedUser.GiftAmount > 0 && orderInfo.Amount > 0 {
+			orderInfo.GiftAmount = min(lockedUser.GiftAmount, orderInfo.Amount)
+			orderInfo.Amount -= orderInfo.GiftAmount
+		}
 		if orderInfo.GiftAmount > 0 {
-			// update user deduction && Pre deduction ,Return after canceling the order
-			u.GiftAmount -= orderInfo.GiftAmount
-			if e := txStore.User().Update(l.ctx, u); e != nil {
-				l.Errorw("[Purchase] Database update error", logger.Field("error", e.Error()), logger.Field("user", u))
+			lockedUser.GiftAmount -= orderInfo.GiftAmount
+			if e := txStore.User().UpdateBalanceFields(l.ctx, lockedUser); e != nil {
+				l.Errorw("[Purchase] Database update error", logger.Field("error", e.Error()), logger.Field("user", lockedUser))
 				return e
 			}
 			// create deduction record
@@ -248,7 +259,7 @@ func (l *PurchaseLogic) Purchase(req *dto.PurchaseOrderRequest) (resp *dto.Purch
 				OrderNo:     orderInfo.OrderNo,
 				SubscribeId: 0,
 				Amount:      orderInfo.GiftAmount,
-				Balance:     u.GiftAmount,
+				Balance:     lockedUser.GiftAmount,
 				Remark:      "Purchase order deduction",
 				Timestamp:   timeutil.Now().UnixMilli(),
 			}
@@ -257,7 +268,7 @@ func (l *PurchaseLogic) Purchase(req *dto.PurchaseOrderRequest) (resp *dto.Purch
 			if e := txStore.Log().Insert(l.ctx, &log.SystemLog{
 				Type:     log.TypeGift.Uint8(),
 				Date:     timeutil.Now().Format(time.DateOnly),
-				ObjectID: u.Id,
+				ObjectID: lockedUser.Id,
 				Content:  string(content),
 			}); e != nil {
 				l.Errorw("[Purchase] Database insert error",
@@ -268,14 +279,12 @@ func (l *PurchaseLogic) Purchase(req *dto.PurchaseOrderRequest) (resp *dto.Purch
 			}
 		}
 
-		if sub.Inventory != -1 {
-			// decrease subscribe plan stock
-			sub.Inventory -= 1
-			// update subscribe plan stock
-			if err = txStore.Subscribe().Update(l.ctx, sub); err != nil {
-				l.Errorw("[Purchase] Database update error", logger.Field("error", err.Error()), logger.Field("subscribe", sub))
-				return err
-			}
+		reservedInventory, e := txStore.Subscribe().ReserveInventory(l.ctx, sub.Id)
+		if e != nil {
+			return e
+		}
+		if !reservedInventory {
+			return errors.Wrapf(xerr.NewErrCode(xerr.SubscribeOutOfStock), "subscribe out of stock")
 		}
 
 		// insert order

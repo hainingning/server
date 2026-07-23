@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/perfect-panel/server/pkg/device"
+	"github.com/perfect-panel/server/pkg/exchangeRate"
 
 	"github.com/perfect-panel/server/internal/config"
 	"github.com/perfect-panel/server/internal/repository"
@@ -16,17 +17,12 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// PluginReadySignaler 用于等待插件管理器就绪
-type PluginReadySignaler interface {
-	WaitReady(ctx context.Context) error
-}
-
 type ServiceContext struct {
 	Redis        *redis.Client
 	Config       config.Config
 	Queue        *asynq.Client
 	Inspector    *asynq.Inspector
-	ExchangeRate float64
+	ExchangeRate *exchangeRate.Cache
 	GeoIP        *IPLocation
 	Store        repository.Store
 
@@ -36,8 +32,6 @@ type ServiceContext struct {
 	NodeMultiplierManager *nodeMultiplier.Manager
 	AuthLimiter           *limit.PeriodLimit
 	DeviceManager         *device.DeviceManager
-	PluginReady           PluginReadySignaler
-	PluginMgr             any // *plugin.Manager, avoids import cycle
 }
 
 func NewServiceContext(c config.Config) *ServiceContext {
@@ -72,7 +66,7 @@ func NewServiceContext(c config.Config) *ServiceContext {
 		Config:       c,
 		Queue:        NewAsynqClient(c),
 		Inspector:    NewAsynqInspector(c),
-		ExchangeRate: 0,
+		ExchangeRate: exchangeRate.NewCache(0),
 		GeoIP:        geoIP,
 		Store:        store,
 		//NodeCache:   cache.NewNodeCacheClient(rds),

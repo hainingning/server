@@ -12,7 +12,6 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app/server"
 	"github.com/perfect-panel/server/internal/handler"
-	"github.com/perfect-panel/server/internal/plugin"
 	"github.com/perfect-panel/server/internal/route"
 	"github.com/perfect-panel/server/internal/svc"
 )
@@ -42,13 +41,14 @@ func TestSwaggerCoversHertzRoutes(t *testing.T) {
 	// Register both supported subscription URL forms. SubscribePath remains
 	// empty so that the documented default path is registered as well.
 	serverCtx.Config.Subscribe.PanDomain = true
+	// The Edge route is opt-in in production, but it is part of the complete
+	// documented API surface and is enabled for this contract test.
+	serverCtx.Config.EdgeSubscribe.Enabled = true
 
 	engine := server.New()
 	route.RegisterHandlers(engine, serverCtx)
 	handler.RegisterTelegramHandlers(engine, serverCtx)
 	handler.RegisterNotifyHandlers(engine, serverCtx)
-	pluginManager := plugin.NewManager(&plugin.HostEnv{Config: serverCtx.Config})
-	route.RegisterPluginDispatcherRoutes(engine, serverCtx, pluginManager)
 
 	document := readSwaggerDocument(t)
 	want := make(map[string]bool)
@@ -110,7 +110,7 @@ func TestSwaggerScopesPartitionFullDocument(t *testing.T) {
 	fullOperations := documentedOperations(full)
 	combined := make(map[string]bool)
 
-	for _, scope := range []string{"admin", "user", "common", "node"} {
+	for _, scope := range []string{"admin", "user", "common", "node", "edge"} {
 		file := filepath.Join(root, "build", "swagger", scope+".json")
 		if _, err := os.Stat(file); err != nil {
 			if os.IsNotExist(err) {

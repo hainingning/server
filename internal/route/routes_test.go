@@ -45,11 +45,8 @@ func TestRegisterHandlers_routeInventory(t *testing.T) {
 	}
 
 	// Then
-	if len(routes) != 259 {
-		t.Fatalf("expected 259 routes, got %d", len(routes))
-	}
-	if !strings.Contains(actual.String(), "GET /v1/admin/plugins ") || !strings.Contains(actual.String(), "GET /v1/admin/plugins/ ") {
-		t.Fatal("expected distinct plugin collection slash variants")
+	if len(routes) != 239 {
+		t.Fatalf("expected 239 routes, got %d", len(routes))
 	}
 	if !bytes.Equal([]byte(actual.String()), expected) {
 		t.Fatal("route inventory differs from golden")
@@ -70,27 +67,22 @@ func normalizeRouteHandler(raw string) (string, error) {
 	), nil
 }
 
-func TestRegisterHandlers_rejectsPluginRequestWithoutAuthorization(t *testing.T) {
+func TestRegisterHandlers_edgeManifestHidesUnauthorizedRequests(t *testing.T) {
 	// Given
 	router := server.Default()
-	RegisterHandlers(router, &svc.ServiceContext{})
+	RegisterHandlers(router, &svc.ServiceContext{Config: appconfig.Config{
+		EdgeSubscribe: appconfig.EdgeSubscribeConfig{Enabled: true},
+	}})
 	ctx := router.NewContext()
-	ctx.Request.SetRequestURI("/v1/admin/plugin/list")
+	ctx.Request.SetRequestURI("/api/edge/v1/manifest?token=probe")
 	ctx.Request.Header.SetMethod(http.MethodGet)
 
 	// When
 	router.ServeHTTP(context.Background(), ctx)
 
-	// Then
-	var response struct {
-		Code uint32 `json:"code"`
-		Msg  string `json:"msg"`
-	}
-	if err := json.Unmarshal(ctx.Response.Body(), &response); err != nil {
-		t.Fatalf("unmarshal auth envelope: %v", err)
-	}
-	if response.Code != xerr.ErrorTokenEmpty || response.Msg != "User token is empty" {
-		t.Fatalf("expected missing-token envelope, got (%d, %q)", response.Code, response.Msg)
+	// Then: no datastore access is attempted and credential/token state remains hidden.
+	if ctx.Response.StatusCode() != http.StatusNotFound || string(ctx.Response.Body()) != "Not Found" {
+		t.Fatalf("expected a uniform 404, got (%d, %q)", ctx.Response.StatusCode(), ctx.Response.Body())
 	}
 }
 
@@ -104,7 +96,7 @@ func TestRegisterHandlers_configuredRoutes(t *testing.T) {
 	}{
 		{
 			name:           "empty-fallback",
-			wantRouteCount: 259,
+			wantRouteCount: 239,
 			present:        []string{"/v1/subscribe/config"},
 			absent:         []string{"/"},
 		},
@@ -113,7 +105,7 @@ func TestRegisterHandlers_configuredRoutes(t *testing.T) {
 			subscribe: appconfig.SubscribeConfig{
 				SubscribePath: "/custom/subscribe",
 			},
-			wantRouteCount: 259,
+			wantRouteCount: 239,
 			present:        []string{"/custom/subscribe"},
 			absent:         []string{"/v1/subscribe/config", "/"},
 		},
@@ -122,7 +114,7 @@ func TestRegisterHandlers_configuredRoutes(t *testing.T) {
 			subscribe: appconfig.SubscribeConfig{
 				PanDomain: false,
 			},
-			wantRouteCount: 259,
+			wantRouteCount: 239,
 			present:        []string{"/v1/subscribe/config"},
 			absent:         []string{"/"},
 		},
@@ -131,14 +123,23 @@ func TestRegisterHandlers_configuredRoutes(t *testing.T) {
 			subscribe: appconfig.SubscribeConfig{
 				PanDomain: true,
 			},
-			wantRouteCount: 260,
+			wantRouteCount: 240,
 			present:        []string{"/v1/subscribe/config", "/"},
+		},
+		{
+			name:           "edge-manifest-enabled",
+			wantRouteCount: 240,
+			present:        []string{"/v1/subscribe/config", "/api/edge/v1/manifest"},
 		},
 	}
 	for _, tc := range routeCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Given
-			svcCtx := &svc.ServiceContext{Config: appconfig.Config{Subscribe: tc.subscribe}}
+			config := appconfig.Config{Subscribe: tc.subscribe}
+			if tc.name == "edge-manifest-enabled" {
+				config.EdgeSubscribe.Enabled = true
+			}
+			svcCtx := &svc.ServiceContext{Config: config}
 			router := server.Default()
 			RegisterHandlers(router, svcCtx)
 			routes := router.Routes()
@@ -230,12 +231,6 @@ func TestRegisterHandlers_middlewareContracts(t *testing.T) {
 		wantCode uint32
 		wantMsg  string
 	}{
-		{
-			name:     "admin-auth",
-			paths:    []string{"/v1/admin/plugin/list", "/v1/admin/plugins"},
-			wantCode: xerr.ErrorTokenEmpty,
-			wantMsg:  "User token is empty",
-		},
 		{
 			name: "public-auth-before-device",
 			config: appconfig.Config{Device: appconfig.DeviceConfig{

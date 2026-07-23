@@ -5,8 +5,10 @@ import (
 	"time"
 
 	"github.com/perfect-panel/server/internal/model/dto"
+	userEntity "github.com/perfect-panel/server/internal/model/entity/user"
 	"github.com/perfect-panel/server/internal/svc"
 	"github.com/perfect-panel/server/pkg/logger"
+	"github.com/perfect-panel/server/pkg/timeutil"
 	"github.com/perfect-panel/server/pkg/xerr"
 	"github.com/pkg/errors"
 )
@@ -27,18 +29,18 @@ func NewUpdateUserSubscribeLogic(ctx context.Context, svcCtx *svc.ServiceContext
 }
 
 func (l *UpdateUserSubscribeLogic) UpdateUserSubscribe(req *dto.UpdateUserSubscribeRequest) error {
-	userSub, err := l.svcCtx.Store.User().FindOneSubscribe(l.ctx, req.UserSubscribeId)
+	userSub, err := l.svcCtx.Store.UserSubscription().FindOneSubscribe(l.ctx, req.UserSubscribeId)
 	if err != nil {
 		l.Errorw("FindOneUserSubscribe failed:", logger.Field("error", err.Error()), logger.Field("userSubscribeId", req.UserSubscribeId))
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseQueryError), "FindOneUserSubscribe failed: %v", err.Error())
 	}
 	expiredAt := time.UnixMilli(req.ExpiredAt)
-	now := time.Now()
-	if time.Since(expiredAt).Minutes() > 0 {
-		userSub.Status = 3
+	now := timeutil.Now()
+	if expiredAt.Before(now) {
+		userSub.Status = userEntity.SubscribeStatusExpired
 		userSub.FinishedAt = &now
 	} else {
-		userSub.Status = 1
+		userSub.Status = userEntity.SubscribeStatusActive
 		userSub.FinishedAt = nil
 	}
 
@@ -48,14 +50,14 @@ func (l *UpdateUserSubscribeLogic) UpdateUserSubscribe(req *dto.UpdateUserSubscr
 	userSub.Download = req.Download
 	userSub.Upload = req.Upload
 
-	err = l.svcCtx.Store.User().UpdateSubscribe(l.ctx, userSub)
+	err = l.svcCtx.Store.UserSubscription().UpdateSubscribe(l.ctx, userSub)
 
 	if err != nil {
 		l.Errorw("UpdateSubscribe failed:", logger.Field("error", err.Error()))
 		return errors.Wrapf(xerr.NewErrCode(xerr.DatabaseUpdateError), "UpdateSubscribe failed: %v", err.Error())
 	}
 	// Clear user subscribe cache
-	if err = l.svcCtx.Store.User().ClearSubscribeCache(l.ctx, userSub); err != nil {
+	if err = l.svcCtx.Store.UserCache().ClearSubscribeCache(l.ctx, userSub); err != nil {
 		l.Errorw("ClearSubscribeCache failed:", logger.Field("error", err.Error()), logger.Field("userSubscribeId", userSub.Id))
 		return errors.Wrapf(xerr.NewErrCode(xerr.ERROR), "ClearSubscribeCache failed: %v", err.Error())
 	}
