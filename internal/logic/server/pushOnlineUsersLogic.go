@@ -28,7 +28,7 @@ func NewPushOnlineUsersLogic(ctx context.Context, svcCtx *svc.ServiceContext) *P
 
 func (l *PushOnlineUsersLogic) PushOnlineUsers(req *dto.OnlineUsersRequest) error {
 	// 验证请求数据
-	if req.ServerId <= 0 || len(req.Users) == 0 {
+	if req.ServerId <= 0 || req.Users == nil {
 		return errors.New("invalid request parameters")
 	}
 
@@ -58,13 +58,6 @@ func (l *PushOnlineUsersLogic) PushOnlineUsers(req *dto.OnlineUsersRequest) erro
 		}
 	}
 	err = l.svcCtx.Store.Node().UpdateOnlineUserSubscribe(l.ctx, req.ServerId, req.Protocol, onlineUsers)
-	if err != nil {
-		l.Errorw("[PushOnlineUsers] cache operation error", logger.Field("error", err))
-		return err
-	}
-
-	err = l.svcCtx.Store.Node().UpdateOnlineUserSubscribeGlobal(l.ctx, onlineUsers)
-
 	if err != nil {
 		l.Errorw("[PushOnlineUsers] cache operation error", logger.Field("error", err))
 		return err

@@ -40,7 +40,6 @@ type NodeRepo interface {
 	OnlineUserSubscribe(ctx context.Context, serverId int64, protocol string) (node.OnlineUserSubscribe, error)
 	UpdateOnlineUserSubscribe(ctx context.Context, serverId int64, protocol string, subscribe node.OnlineUserSubscribe) error
 	OnlineUserSubscribeGlobal(ctx context.Context) (int64, error)
-	UpdateOnlineUserSubscribeGlobal(ctx context.Context, subscribe node.OnlineUserSubscribe) error
 	// query
 	FilterServerList(ctx context.Context, params *node.FilterParams) (int64, []*node.Server, error)
 	FilterNodeList(ctx context.Context, params *node.FilterNodeParams) (int64, []*node.Node, error)
@@ -312,55 +311,86 @@ func (m *nodeRepo) OnlineUserSubscribe(ctx context.Context, serverId int64, prot
 
 // UpdateOnlineUserSubscribe Update online user subscribe
 func (m *nodeRepo) UpdateOnlineUserSubscribe(ctx context.Context, serverId int64, protocol string, subscribe node.OnlineUserSubscribe) error {
-	key := fmt.Sprintf(node.OnlineUserCacheKeyWithSubscribe, serverId, protocol)
+	detailKey := fmt.Sprintf(node.OnlineUserCacheKeyWithSubscribe, serverId, protocol)
+	sourceSetKey := fmt.Sprintf(node.OnlineUserSubscribeSetCacheKey, serverId, protocol)
+	if subscribe == nil {
+		subscribe = node.OnlineUserSubscribe{}
+	}
 	data, err := json.Marshal(subscribe)
 	if err != nil {
 		return err
 	}
-	return m.Cache.Set(ctx, key, data, node.Expiry).Err()
+
+	members := make([]interface{}, 0, len(subscribe))
+	for subscribeID := range subscribe {
+		members = append(members, subscribeID)
+	}
+
+	now := time.Now()
+	expiresAt := now.Add(node.Expiry).Unix()
+	_, err = m.Cache.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.Set(ctx, detailKey, data, node.Expiry)
+		pipe.Del(ctx, sourceSetKey)
+
+		if len(members) > 0 {
+			pipe.SAdd(ctx, sourceSetKey, members...)
+			pipe.Expire(ctx, sourceSetKey, node.Expiry)
+			pipe.ZAdd(ctx, node.OnlineUserSubscribeSourceIndexKey, redis.Z{
+				Score:  float64(expiresAt),
+				Member: sourceSetKey,
+			})
+		} else {
+			pipe.ZRem(ctx, node.OnlineUserSubscribeSourceIndexKey, sourceSetKey)
+		}
+
+		pipe.ZRemRangeByScore(
+			ctx,
+			node.OnlineUserSubscribeSourceIndexKey,
+			"-inf",
+			strconv.FormatInt(now.Unix(), 10),
+		)
+		return nil
+	})
+	return err
 }
 
 // DeleteOnlineUserSubscribe Delete online user subscribe
 func (m *nodeRepo) DeleteOnlineUserSubscribe(ctx context.Context, serverId int64, protocol string) error {
-	key := fmt.Sprintf(node.OnlineUserCacheKeyWithSubscribe, serverId, protocol)
-	return m.Cache.Del(ctx, key).Err()
+	detailKey := fmt.Sprintf(node.OnlineUserCacheKeyWithSubscribe, serverId, protocol)
+	sourceSetKey := fmt.Sprintf(node.OnlineUserSubscribeSetCacheKey, serverId, protocol)
+	_, err := m.Cache.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+		pipe.Del(ctx, detailKey, sourceSetKey)
+		pipe.ZRem(ctx, node.OnlineUserSubscribeSourceIndexKey, sourceSetKey)
+		return nil
+	})
+	return err
 }
 
 // OnlineUserSubscribeGlobal Get global online user subscribe count
 func (m *nodeRepo) OnlineUserSubscribeGlobal(ctx context.Context) (int64, error) {
 	now := time.Now().Unix()
-	// Clear expired data
-	if err := m.Cache.ZRemRangeByScore(ctx, node.OnlineUserSubscribeCacheKeyWithGlobal, "-inf", fmt.Sprintf("%d", now)).Err(); err != nil {
+	if err := m.Cache.ZRemRangeByScore(
+		ctx,
+		node.OnlineUserSubscribeSourceIndexKey,
+		"-inf",
+		strconv.FormatInt(now, 10),
+	).Err(); err != nil {
 		return 0, err
 	}
-	return m.Cache.ZCard(ctx, node.OnlineUserSubscribeCacheKeyWithGlobal).Result()
-}
 
-// UpdateOnlineUserSubscribeGlobal Update global online user subscribe count
-func (m *nodeRepo) UpdateOnlineUserSubscribeGlobal(ctx context.Context, subscribe node.OnlineUserSubscribe) error {
-	now := time.Now()
-	expireTime := now.Add(5 * time.Minute).Unix() // set expire time 5 minutes later
-
-	pipe := m.Cache.Pipeline()
-
-	// Clear expired data
-	pipe.ZRemRangeByScore(ctx, node.OnlineUserSubscribeCacheKeyWithGlobal, "-inf", fmt.Sprintf("%d", now.Unix()))
-	// Add or update each subscribe with new expire time
-	for sub := range subscribe {
-		// Use ZAdd to add or update the member with new score (expire time)
-		pipe.ZAdd(ctx, node.OnlineUserSubscribeCacheKeyWithGlobal, redis.Z{
-			Score:  float64(expireTime),
-			Member: sub,
-		})
+	sourceKeys, err := m.Cache.ZRange(ctx, node.OnlineUserSubscribeSourceIndexKey, 0, -1).Result()
+	if err != nil {
+		return 0, err
+	}
+	if len(sourceKeys) == 0 {
+		return 0, nil
 	}
 
-	_, err := pipe.Exec(ctx)
-	return err
-}
-
-// DeleteOnlineUserSubscribeGlobal Delete global online user subscribe count
-func (m *nodeRepo) DeleteOnlineUserSubscribeGlobal(ctx context.Context) error {
-	return m.Cache.Del(ctx, node.OnlineUserSubscribeCacheKeyWithGlobal).Err()
+	subscriptionIDs, err := m.Cache.SUnion(ctx, sourceKeys...).Result()
+	if err != nil {
+		return 0, err
+	}
+	return int64(len(subscriptionIDs)), nil
 }
 
 // FilterServerList Filter Server List

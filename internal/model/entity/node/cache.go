@@ -39,8 +39,10 @@ func (s *Status) Unmarshal(data string) error {
 }
 
 const (
-	Expiry                                = 300 * time.Second              // Cache expiry time in seconds
-	StatusCacheKey                        = "node:status:%d"               // Node status cache key format (Server ID and protocol) Example: node:status:1:shadowsocks
-	OnlineUserCacheKeyWithSubscribe       = "node:online:subscribe:%d:%s"  // Online user subscribe cache key format (Server ID and protocol) Example: node:online:subscribe:1:shadowsocks
-	OnlineUserSubscribeCacheKeyWithGlobal = "node:online:subscribe:global" // Online user global subscribe cache key
+	Expiry                                = 300 * time.Second                 // Cache expiry time in seconds
+	StatusCacheKey                        = "node:status:%d"                  // Node status cache key format (Server ID and protocol) Example: node:status:1:shadowsocks
+	OnlineUserCacheKeyWithSubscribe       = "node:online:subscribe:%d:%s"     // Online user subscribe cache key format (Server ID and protocol) Example: node:online:subscribe:1:shadowsocks
+	OnlineUserSubscribeSetCacheKey        = "node:online:subscribe:set:%d:%s" // Current online subscription IDs for one server and protocol
+	OnlineUserSubscribeSourceIndexKey     = "node:online:subscribe:sources"   // Active online-user source set keys and their expiry timestamps
+	OnlineUserSubscribeCacheKeyWithGlobal = "node:online:subscribe:global"    // Legacy global online subscription cache key
 )

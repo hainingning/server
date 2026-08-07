@@ -75,6 +75,49 @@ func TestBindOnlineUsersRequest_JSON(t *testing.T) {
 	}
 }
 
+func TestBindOnlineUsersRequest_EmptySnapshots(t *testing.T) {
+	t.Run("json", func(t *testing.T) {
+		ctx := app.NewContext(0)
+		ctx.Request.Header.SetContentTypeBytes([]byte("application/json"))
+		ctx.Request.SetBodyString(`{"users":[]}`)
+		var request dto.OnlineUsersRequest
+		if err := bindOnlineUsersRequest(ctx, &request); err != nil {
+			t.Fatalf("bindOnlineUsersRequest() error = %v", err)
+		}
+		if request.Users == nil || len(request.Users) != 0 {
+			t.Fatalf("users = %#v, want a non-nil empty slice", request.Users)
+		}
+	})
+
+	t.Run("protobuf", func(t *testing.T) {
+		ctx := newProtobufContext(t, &serverv1.PushOnlineUsersRequest{})
+		var request dto.OnlineUsersRequest
+		if err := bindOnlineUsersRequest(ctx, &request); err != nil {
+			t.Fatalf("bindOnlineUsersRequest() error = %v", err)
+		}
+		if request.Users == nil || len(request.Users) != 0 {
+			t.Fatalf("users = %#v, want a non-nil empty slice", request.Users)
+		}
+	})
+}
+
+func TestBindOnlineUsersRequest_JSONMissingOrNullUsers(t *testing.T) {
+	for _, body := range []string{`{}`, `{"users":null}`} {
+		t.Run(body, func(t *testing.T) {
+			ctx := app.NewContext(0)
+			ctx.Request.Header.SetContentTypeBytes([]byte("application/json"))
+			ctx.Request.SetBodyString(body)
+			var request dto.OnlineUsersRequest
+			if err := bindOnlineUsersRequest(ctx, &request); err != nil {
+				t.Fatalf("bindOnlineUsersRequest() error = %v", err)
+			}
+			if request.Users != nil {
+				t.Fatalf("users = %#v, want nil", request.Users)
+			}
+		})
+	}
+}
+
 func TestWriteServerReportResult_Protobuf(t *testing.T) {
 	ctx := app.NewContext(0)
 	ctx.Request.Header.Set("Accept", "application/protobuf, application/json;q=0.9")
